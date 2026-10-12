@@ -1,42 +1,382 @@
-```js
-// Главная страница и остальные HTML-страницы из корня проекта.
-app.get('/', (req, res) => {
-  res.sendFile(path.join(ROOT, 'index.html'));
-});
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Аренда спецтехники</title>
+<style>
+:root {
+  --bg: #0b1120;
+  --panel: #151f32;
+  --line: #2b3a53;
+  --text: #edf3ff;
+  --muted: #9aabc5;
+  --accent: #f5b82e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--text);
+  font-family: Segoe UI, Arial, sans-serif;
+  background: radial-gradient(ellipse at 10% 0%, #1b3658, transparent 40%),
+              radial-gradient(ellipse at 95% 15%, #35274c, transparent 30%),
+              var(--bg);
+}
+header {
+  border-bottom: 1px solid var(--line);
+  padding: 22px;
+}
+nav, main {
+  max-width: 1000px;
+  margin: auto;
+}
+nav { display: flex; align-items: center; gap: 12px; }
+.logo {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #201707;
+  font-size: 23px;
+}
+h1 { font-size: 24px; margin: 0; }
+.subtitle, .muted { color: var(--muted); }
+main { padding: 35px 18px 60px; }
+.hero { margin-bottom: 25px; }
+.hero h2 { font-size: 30px; margin-bottom: 10px; }
+.hero p { color: var(--muted); line-height: 1.6; }
+.panel {
+  padding: 25px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(145deg, #18243a, #111a2b);
+  box-shadow: 0 12px 35px #0002;
+}
+.panel h2 { margin-top: 0; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.field { margin-bottom: 17px; min-width: 0; }
+.field.full { grid-column: 1 / -1; }
+label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 14px;
+  color: var(--muted);
+}
+input, select, textarea {
+  width: 100%;
+  padding: 13px;
+  border: 1px solid #34445e;
+  border-radius: 10px;
+  background: #0c1525;
+  color: var(--text);
+  font: inherit;
+}
+textarea { min-height: 100px; resize: vertical; }
+button {
+  padding: 14px 20px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #201707;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+button:disabled { opacity: .6; cursor: wait; }
+.notice {
+  margin-top: 16px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.notice a { color: #93c5fd; }
+.error { color: #fb7185; }
+.success { color: #86efac; }
+footer {
+  padding: 20px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 13px;
+}
+@media (max-width: 600px) {
+  header { padding: 16px; }
+  h1 { font-size: 19px; }
+  .hero h2 { font-size: 25px; }
+  .grid { grid-template-columns: 1fr; }
+  .field.full { grid-column: auto; }
+  .panel { padding: 18px; }
+  main { padding: 24px 12px 40px; }
+  button { width: 100%; }
+}
+</style>
+</head>
+<body>
 
-app.get('/index.html', (req, res) => {
-  res.sendFile(path.join(ROOT, 'index.html'));
-});
+<header>
+  <nav>
+    <div class="logo">⚙</div>
+    <div>
+      <h1 id="siteName">Аренда спецтехники</h1>
+      <div class="subtitle" id="siteCity">Оформление заявки онлайн</div>
+    </div>
+  </nav>
+</header>
 
-app.get('/admin.html', (req, res) => {
-  const file = path.join(ROOT, 'admin.html');
+<main>
+  <section class="hero">
+    <h2>Аренда спецтехники</h2>
+    <p>
+      Заполните форму, чтобы отправить заявку.
+      После оформления вы получите персональную ссылку,
+      по которой сможете следить за статусом заявки и общаться с администратором.
+    </p>
+  </section>
 
-  if (!fs.existsSync(file)) {
-    return res.status(404).send('Файл admin.html не найден в репозитории.');
+  <section class="panel">
+    <h2>Оставить заявку</h2>
+    <p class="muted">Поля со звёздочкой обязательны.</p>
+
+    <form id="requestForm">
+      <div class="grid">
+
+        <div class="field">
+          <label for="name">Ваше имя *</label>
+          <input id="name" name="name" autocomplete="name"
+                 maxlength="100" required>
+        </div>
+
+        <div class="field">
+          <label for="phone">Номер телефона *</label>
+          <input id="phone" name="phone" type="tel"
+                 autocomplete="tel" maxlength="40" required>
+        </div>
+
+        <div class="field full">
+          <label for="equipment">Какая техника нужна? *</label>
+          <input id="equipment" name="equipment" list="equipmentList"
+                 maxlength="200" placeholder="Выберите или введите технику"
+                 required>
+          <datalist id="equipmentList"></datalist>
+        </div>
+
+        <div class="field">
+          <label for="duration">Срок аренды</label>
+          <input id="duration" name="duration"
+                 maxlength="100" placeholder="Например, 2 дня">
+        </div>
+
+        <div class="field">
+          <label for="arrival">Когда нужна техника?</label>
+          <input id="arrival" name="arrival"
+                 maxlength="150" placeholder="Дата и время">
+        </div>
+
+        <div class="field full">
+          <label for="address">Адрес доставки</label>
+          <input id="address" name="address"
+                 maxlength="300" placeholder="Укажите адрес">
+        </div>
+
+        <div class="field full">
+          <label for="wishes">Дополнительные пожелания</label>
+          <textarea id="wishes" name="wishes" maxlength="3000"
+                    placeholder="Опишите дополнительные требования"></textarea>
+        </div>
+
+      </div>
+
+      <button id="submitBtn" type="submit">Отправить заявку</button>
+      <div id="notice" class="notice" role="status" aria-live="polite"></div>
+    </form>
+  </section>
+</main>
+
+<footer>Аренда спецтехники</footer>
+
+<script>
+'use strict';
+
+const $ = id => document.getElementById(id);
+let equipmentItems = [];
+let sending = false;
+
+async function api(url, options = {}) {
+  const response = await fetch(url, {
+    credentials: 'same-origin',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    }
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.error || data.message || 'Ошибка сервера');
   }
 
-  res.sendFile(file);
-});
+  return data;
+}
 
-app.get('/status.html', (req, res) => {
-  const file = path.join(ROOT, 'status.html');
+function equipmentName(item) {
+  if (typeof item === 'string') return item;
 
-  if (!fs.existsSync(file)) {
-    return res.status(404).send('Файл status.html не найден в репозитории.');
-  }
+  return String(
+    item.name ||
+    item.title ||
+    item.model ||
+    item.equipment ||
+    item.equipment_name ||
+    item.type ||
+    ''
+  );
+}
 
-  res.sendFile(file);
-});
+async function loadPublicData() {
+  try {
+    const data = await api('/api/public');
 
-// Неизвестные API-маршруты.
-app.use((req, res, next) => {
-  if (req.path.startsWith('/api/')) {
-    return res.status(404).json({
-      ok: false,
-      error: 'API-маршрут не найден.'
+    if (data.siteName) {
+      $('siteName').textContent = data.siteName;
+      document.title = data.siteName;
+    }
+
+    if (data.city) {
+      $('siteCity').textContent = data.city;
+    }
+
+    equipmentItems = Array.isArray(data.equipment)
+      ? data.equipment
+      : [];
+
+    const list = $('equipmentList');
+    list.replaceChildren();
+
+    equipmentItems.forEach(item => {
+      const name = equipmentName(item);
+      if (!name) return;
+
+      const option = document.createElement('option');
+      option.value = name;
+      list.appendChild(option);
     });
+  } catch (error) {
+    $('siteCity').textContent =
+      'Можно заполнить заявку вручную.';
+  }
+}
+
+$('requestForm').addEventListener('submit', async event => {
+  event.preventDefault();
+
+  if (sending) return;
+
+  const name = $('name').value.trim();
+  const phone = $('phone').value.trim();
+  const equipment = $('equipment').value.trim();
+
+  if (!name || !phone || !equipment) {
+    $('notice').className = 'notice error';
+    $('notice').textContent =
+      'Заполните имя, телефон и выберите технику.';
+    return;
   }
 
-  res.status(404).send('Страница не найдена: ' + req.path);
+  const selected = equipmentItems.find(item =>
+    equipmentName(item).toLowerCase() === equipment.toLowerCase()
+  );
+
+  const payload = {
+    name,
+    phone,
+    equipment,
+    duration: $('duration').value.trim(),
+    arrival: $('arrival').value.trim(),
+    address: $('address').value.trim(),
+    wishes: $('wishes').value.trim()
+  };
+
+  if (selected && typeof selected === 'object' && selected.id != null) {
+    payload.equipment_id = selected.id;
+  }
+
+  sending = true;
+  $('submitBtn').disabled = true;
+  $('submitBtn').textContent = 'Отправляем…';
+  $('notice').className = 'notice';
+  $('notice').textContent = 'Отправка заявки…';
+
+  try {
+    const data = await api('/api/requests', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+
+    if (!data.statusUrl) {
+      throw new Error('Заявка создана, но ссылка для её просмотра не получена.');
+    }
+
+    $('notice').className = 'notice success';
+    $('notice').replaceChildren();
+
+    const heading = document.createElement('strong');
+    heading.textContent = 'Заявка успешно отправлена!';
+    $('notice').appendChild(heading);
+    $('notice').appendChild(document.createElement('br'));
+
+    const explanation = document.createElement('span');
+    explanation.textContent =
+      'Сохраните эту ссылку: она нужна для просмотра статуса заявки и общения с администратором.';
+    $('notice').appendChild(explanation);
+    $('notice').appendChild(document.createElement('br'));
+
+    const link = document.createElement('a');
+    link.href = data.statusUrl;
+    link.textContent = 'Открыть мою заявку';
+    link.target = '_blank';
+    link.rel = 'noopener';
+    $('notice').appendChild(link);
+
+    const copyButton = document.createElement('button');
+    copyButton.type = 'button';
+    copyButton.style.marginTop = '12px';
+    copyButton.textContent = 'Скопировать ссылку';
+    copyButton.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(
+          new URL(data.statusUrl, location.origin).href
+        );
+        copyButton.textContent = 'Ссылка скопирована';
+      } catch {
+        link.focus();
+        $('notice').appendChild(document.createTextNode(
+          ' Выделите ссылку выше и скопируйте её вручную.'
+        ));
+      }
+    });
+    $('notice').appendChild(document.createElement('br'));
+    $('notice').appendChild(copyButton);
+
+    $('requestForm').reset();
+  } catch (error) {
+    $('notice').className = 'notice error';
+    $('notice').textContent =
+      'Не удалось отправить заявку: ' + error.message;
+  } finally {
+    sending = false;
+    $('submitBtn').disabled = false;
+    $('submitBtn').textContent = 'Отправить заявку';
+  }
 });
-```
+
+loadPublicData();
+</script>
+</body>
+</html>
