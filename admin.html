@@ -1,4 +1,4 @@
-```html
+
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -44,7 +44,7 @@ select,input,textarea{width:100%;color:var(--text);background:#0c1525;border:1px
 .chat{margin-top:15px;border:1px solid var(--line);border-radius:15px;overflow:hidden;background:#0c1525}
 .chat-head{padding:14px 16px;background:#19263b;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px}
 .chat-head h3{margin:0;font-size:15px}
-.messages{padding:16px;display:flex;flex-direction:column;gap:12px;max-height:360px;min-height:90px;overflow-y:auto}
+.messages{padding:16px;display:flex;flex-direction:column;gap:12px;max-height:360px;min-height:90px;overflow-y:auto;overflow-anchor:none;overscroll-behavior:contain}
 .message{max-width:88%;padding:11px 13px;border-radius:13px;background:#1b2a40;align-self:flex-start;overflow-wrap:anywhere;white-space:pre-wrap}
 .message.admin{background:#263b25;align-self:flex-end;border:1px solid #365a39}
 .message-meta{font-size:11px;color:var(--muted);margin-bottom:6px}
@@ -300,7 +300,8 @@ ${token?`<a href="/status.html?token=${encodeURIComponent(token)}" target="_blan
 function chatHtml(r){
 const id=requestId(r),messages=r.messages||[];
 const unread=messages.filter(m=>!isAdmin(m)&&!seenAdminMessages.has(String(m.id))).length;
-return `<article class="card">
+const last=messages[messages.length-1];
+return `<article class="card" data-chat-card="${esc(id)}">
 <div class="chat-preview">
 <div>
 <h2>${esc(r.name||r.customer||'Клиент')} — заявка №${esc(id)} ${unread?`<span class="badge">${unread}</span>`:''}</h2>
@@ -308,8 +309,8 @@ return `<article class="card">
 </div>
 <button class="primary" onclick="openRequestChat('${esc(id)}')">Открыть переписку</button>
 </div>
-<div class="muted">${messages.length?esc((messages[messages.length-1].text||messages[messages.length-1].message||'').slice(0,180)):'Сообщений пока нет'}</div>
-<div id="chat-detail-${esc(id)}" class="hidden">
+<div class="muted">${last?esc((last.text||last.message||'').slice(0,180)):'Сообщений пока нет'}</div>
+<div id="chat-detail-${esc(id)}" class="${openChatIds.has(String(id))?'':'hidden'}">
 <div class="messages" id="chat-messages-${esc(id)}">${renderMessages(r)}</div>
 <form class="chat-compose" data-chat="${esc(id)}">
 <textarea data-draft="${esc(id)}" id="chat-draft-${esc(id)}" placeholder="Напишите сообщение клиенту…" rows="2">${esc(drafts[id]||'')}</textarea>
@@ -320,14 +321,18 @@ return `<article class="card">
 }
 
 function openRequestChat(id){
+id=String(id);
 const el=$('chat-detail-'+id);
 if(el){
 const willOpen=el.classList.contains('hidden');
 el.classList.toggle('hidden',!willOpen);
-if(willOpen)openChatIds.add(String(id));
-else openChatIds.delete(String(id));
+if(willOpen){
+openChatIds.add(id);
 const box=$('chat-messages-'+id);
 if(box)box.scrollTop=box.scrollHeight
+}else{
+openChatIds.delete(id)
+}
 }
 markChatsRead()
 }
@@ -347,49 +352,151 @@ $('adminUnread').textContent=n;
 $('adminUnread').classList.toggle('hidden',n===0)
 }
 
+/*
+ * Главное исправление:
+ * сохраняем прокрутку всех чатов и страницы до обновления,
+ * а после обновления возвращаем её на прежнее место.
+ * Если пользователь был внизу переписки — остаёмся внизу.
+ * Если он читал старые сообщения — не перематываем его.
+ * Также сохраняем фокус и позицию курсора в поле ввода.
+ */
 function render(data){
+const pageScrollY=window.scrollY;
+const scrollPositions=new Map();
+
+document.querySelectorAll('.messages').forEach(box=>{
+scrollPositions.set(box.id,{
+top:box.scrollTop,
+atBottom:box.scrollHeight-box.scrollTop-box.clientHeight<40
+})
+});
+
+const current=document.activeElement;
+let focusInfo=null;
+
+if(current&&(
+current.matches('textarea[data-draft]')||
+current.matches('select[data-status]')
+)){
+focusInfo={
+id:current.id,
+isTextarea:current.matches('textarea'),
+start:current.matches('textarea')?current.selectionStart:null,
+end:current.matches('textarea')?current.selectionEnd:null
+}
+}
+
 requestsCache=data;
+
 $('totalCount').textContent=data.length;
 $('newCount').textContent=data.filter(r=>getStatus(r)==='Новая'||getStatus(r)==='new').length;
 $('workCount').textContent=data.filter(r=>['Связались','Подтверждена','in_progress'].includes(getStatus(r))).length;
 $('lastUpdated').textContent='Обновлено: '+new Date().toLocaleTimeString('ru-RU');
 
-const current=document.activeElement;
-document.querySelectorAll('textarea[data-draft]').forEach(el=>drafts[el.dataset.draft]=el.value);
-document.querySelectorAll('select[data-status]').forEach(el=>pendingStatuses[el.dataset.status]=el.value);
-const editing=current&&(current.matches('textarea[data-draft]')||current.matches('select[data-status]'));
+document.querySelectorAll('textarea[data-draft]').forEach(el=>{
+drafts[el.dataset.draft]=el.value
+});
+
+document.querySelectorAll('select[data-status]').forEach(el=>{
+pendingStatuses[el.dataset.status]=el.value
+});
+
+const editing=!!(current&&(
+current.matches('textarea[data-draft]')||
+current.matches('select[data-status]')
+));
 
 if(!editing){
-$('requests').innerHTML=data.length?data.map(cardHtml).join(''):'<div class="card empty">Пока нет заявок. Когда клиент отправит заявку, она появится здесь.</div>';
+$('requests').innerHTML=data.length
+?data.map(cardHtml).join('')
+:'<div class="card empty">Пока нет заявок. Когда клиент отправит заявку, она появится здесь.</div>';
 bindInputs()
 }else{
+/* Не перестраиваем карточки заявок, пока пользователь печатает
+   или меняет статус. Обновляем только содержимое сообщений. */
 data.forEach(r=>{
-const box=$('messages-'+requestId(r));
+const id=requestId(r);
+const box=$('messages-'+id);
 if(box){
-const bottom=box.scrollHeight-box.scrollTop-box.clientHeight<40;
+const saved=scrollPositions.get(box.id);
 box.innerHTML=renderMessages(r);
-if(bottom)box.scrollTop=box.scrollHeight
+if(saved){
+box.scrollTop=saved.atBottom
+?box.scrollHeight
+:Math.min(saved.top,Math.max(0,box.scrollHeight-box.clientHeight))
+}
 }
 })
 }
 
-$('chats').innerHTML=data.length?data.map(chatHtml).join(''):'<div class="card empty">Чатов пока нет.</div>';
+/* Перестраиваем список чатов, затем восстанавливаем открытые переписки. */
+$('chats').innerHTML=data.length
+?data.map(chatHtml).join('')
+:'<div class="card empty">Чатов пока нет.</div>';
+
 openChatIds.forEach(id=>{
 const detail=$('chat-detail-'+id);
 if(detail)detail.classList.remove('hidden')
 });
+
 bindChatForms();
-updateUnreadBadge()
+
+/* Возвращаем прокрутку каждого блока сообщений. */
+scrollPositions.forEach((saved,id)=>{
+const box=$(id);
+if(!box)return;
+
+box.scrollTop=saved.atBottom
+?box.scrollHeight
+:Math.min(saved.top,Math.max(0,box.scrollHeight-box.clientHeight))
+});
+
+/* Возвращаем фокус и курсор в поле, если оно было активно. */
+if(focusInfo&&focusInfo.id){
+const field=$(focusInfo.id);
+if(field){
+field.focus({preventScroll:true});
+
+if(
+focusInfo.isTextarea&&
+focusInfo.start!==null&&
+focusInfo.end!==null
+){
+try{
+const length=field.value.length;
+field.setSelectionRange(
+Math.min(focusInfo.start,length),
+Math.min(focusInfo.end,length)
+)
+}catch{}
+}
+}
+}
+
+updateUnreadBadge();
+
+/* Не позволяем автообновлению сдвигать всю страницу. */
+window.scrollTo({top:pageScrollY,behavior:'instant'})
 }
 
 function bindInputs(){
-document.querySelectorAll('textarea[data-draft]').forEach(el=>el.addEventListener('input',()=>drafts[el.dataset.draft]=el.value));
-document.querySelectorAll('select[data-status]').forEach(el=>el.addEventListener('change',()=>pendingStatuses[el.dataset.status]=el.value));
-document.querySelectorAll('#requests form[data-chat]').forEach(form=>form.addEventListener('submit',e=>sendReply(e,form.dataset.chat)))
+document.querySelectorAll('textarea[data-draft]').forEach(el=>{
+el.addEventListener('input',()=>drafts[el.dataset.draft]=el.value)
+});
+
+document.querySelectorAll('select[data-status]').forEach(el=>{
+el.addEventListener('change',()=>pendingStatuses[el.dataset.status]=el.value)
+});
+
+document.querySelectorAll('#requests form[data-chat]').forEach(form=>{
+form.addEventListener('submit',e=>sendReply(e,form.dataset.chat))
+})
 }
 
 function bindChatForms(){
-document.querySelectorAll('#chats form[data-chat]').forEach(form=>form.addEventListener('submit',e=>sendReply(e,form.dataset.chat)))
+document.querySelectorAll('#chats form[data-chat]').forEach(form=>{
+form.addEventListener('submit',e=>sendReply(e,form.dataset.chat))
+})
 }
 
 async function loadRequests(){
@@ -399,10 +506,18 @@ try{
 const result=await api('/api/admin/data');
 let data=Array.isArray(result)?result:(result.requests||result.data?.requests||[]);
 const allMessages=result.messages||result.data?.messages||[];
-if(allMessages.length)data=data.map(r=>({...r,messages:allMessages.filter(m=>String(m.requestId)===requestId(r))}));
+
+if(allMessages.length){
+data=data.map(r=>({
+...r,
+messages:allMessages.filter(m=>String(m.requestId)===requestId(r))
+}))
+}
 
 if(initialMessageLoad){
-try{JSON.parse(localStorage.getItem('excavator_admin_seen')||'[]').forEach(x=>seenAdminMessages.add(String(x)))}catch{}
+try{
+JSON.parse(localStorage.getItem('excavator_admin_seen')||'[]').forEach(x=>seenAdminMessages.add(String(x)))
+}catch{}
 initialMessageLoad=false
 }else{
 let incoming=[];
@@ -411,6 +526,7 @@ if(!isAdmin(m)&&!seenAdminMessages.has(String(m.id)))incoming.push(m)
 }));
 if(incoming.length&&activeTab!=='chats')beep()
 }
+
 render(data)
 }catch(err){
 if(!err.message.includes('Нужно войти'))console.error('Ошибка обновления:',err)
@@ -439,9 +555,12 @@ showToast('Не удалось сохранить статус: '+err.message)
 async function deleteRequest(id){
 if(!confirm('Точно удалить заявку №'+id+'? Это действие нельзя отменить.'))return;
 try{
-await api('/api/admin/requests/'+encodeURIComponent(id),{method:'DELETE',body:'{}'});
+await api('/api/admin/requests/'+encodeURIComponent(id),{
+method:'DELETE',body:'{}'
+});
 delete drafts[id];
 delete pendingStatuses[id];
+openChatIds.delete(String(id));
 showToast('Заявка удалена');
 await loadRequests()
 }catch(err){
@@ -451,25 +570,38 @@ showToast('Не удалось удалить: '+err.message)
 
 async function sendReply(event,id){
 event.preventDefault();
+id=String(id);
+
 if(sendingReplies.has(id))return;
-const form=event.currentTarget,textarea=form.querySelector('textarea'),message=textarea?.value.trim();
-if(!message){showToast('Сначала напишите сообщение');return}
+
+const form=event.currentTarget;
+const textarea=form.querySelector('textarea');
+const message=textarea?.value.trim();
+
+if(!message){
+showToast('Сначала напишите сообщение');
+return
+}
+
 const button=form.querySelector('button[type=submit]');
 sendingReplies.add(id);
-button.disabled=true;
+if(button)button.disabled=true;
+
 try{
 await api('/api/admin/requests/'+encodeURIComponent(id)+'/reply',{
-method:'POST',body:JSON.stringify({message,text:message})
+method:'POST',
+body:JSON.stringify({message,text:message})
 });
+
 drafts[id]='';
-textarea.value='';
+if(textarea)textarea.value='';
 showToast('Сообщение отправлено');
 await loadRequests()
 }catch(err){
 showToast('Не удалось отправить: '+err.message)
 }finally{
 sendingReplies.delete(id);
-button.disabled=false
+if(button)button.disabled=false
 }
 }
 
@@ -478,6 +610,7 @@ try{
 const saved=JSON.parse(localStorage.getItem('excavator_admin_seen')||'[]');
 saved.forEach(x=>seenAdminMessages.add(String(x)))
 }catch{}
+
 try{
 await api('/api/admin/me');
 showDashboard();
@@ -490,9 +623,11 @@ showLogin()
 init();
 
 document.addEventListener('click',()=>{
-try{audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext)()}catch{}
+try{
+audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext)()
+}catch{}
 },{once:true});
 </script>
 </body>
 </html>
-```
+
