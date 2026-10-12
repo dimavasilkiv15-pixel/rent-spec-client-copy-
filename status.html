@@ -1,13 +1,479 @@
-<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Моя заявка — Аренда спецтехники</title><style>
-*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:22px;color:#edf3ff;font-family:Segoe UI,Arial,sans-serif;background:radial-gradient(ellipse at 10% 0%,#1b3658,transparent 40%),radial-gradient(ellipse at 95% 15%,#35274c,transparent 30%),#0b1120}main{max-width:850px;margin:25px auto}.panel{background:linear-gradient(145deg,#18243a,#111a2b);border:1px solid #2b3a53;border-radius:18px;padding:22px;margin-bottom:18px;box-shadow:0 12px 35px #0002}h1{font-size:25px;margin:0 0 8px}h2{font-size:18px;margin:0}p,.muted{color:#9aabc5;font-size:14px}.tag{display:inline-block;padding:7px 11px;border-radius:20px;background:#283650;font-size:13px;margin-top:10px}.details{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}.detail{background:#0c1525;border:1px solid #26354b;border-radius:12px;padding:13px;min-width:0}.label{font-size:11px;color:#9aabc5;text-transform:uppercase;margin-bottom:7px}.value{overflow-wrap:anywhere;white-space:pre-wrap}.chat{padding:0;overflow:hidden}.chat-head{background:#19263b;border-bottom:1px solid #2b3a53;padding:17px}.messages{height:350px;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;background:#0c1525}.message{max-width:88%;align-self:flex-start;background:#1b2a40;border:1px solid #2b3a53;padding:12px 14px;border-radius:13px;white-space:pre-wrap;overflow-wrap:anywhere}.message.mine{align-self:flex-end;background:#263b25;border-color:#365a39}.meta{font-size:11px;color:#9aabc5;margin-bottom:6px}.empty{text-align:center;color:#9aabc5;padding:30px 10px}form{display:flex;gap:10px;padding:14px;border-top:1px solid #2b3a53;align-items:flex-end}textarea{flex:1;min-width:0;resize:vertical;min-height:48px;max-height:160px;background:#0c1525;color:#edf3ff;border:1px solid #34445e;border-radius:10px;padding:13px;font:inherit}button{border:0;border-radius:10px;padding:14px 17px;background:#f5b82e;color:#201707;font-weight:700;cursor:pointer;min-height:48px}button:disabled{opacity:.5;cursor:wait}#notice{padding:0 15px 13px;color:#9aabc5;font-size:13px}.error{color:#fb7185!important}.toplink{display:inline-block;margin-bottom:15px;color:#93c5fd;text-decoration:none}@media(max-width:560px){body{padding:12px}main{margin:10px auto}.panel{padding:16px}.details{grid-template-columns:1fr}.messages{height:330px}form{flex-direction:column;align-items:stretch}button{width:100%}}
-</style></head><body><main><a class="toplink" href="/">← На головну</a><section class="panel"><h1>Моя заявка</h1><p>Здесь можно посмотреть информацию о заказе и связаться с администратором.</p><div id="status" class="tag">Загружаем статус…</div><div id="details" class="details"></div><div id="pageError" class="muted"></div></section><section class="panel chat"><div class="chat-head"><h2>💬 Чат с администратором</h2><p style="margin-bottom:0">Напишите сообщение — администратор увидит его в панели управления.</p></div><div id="messages" class="messages"><div class="empty">Загружаем переписку…</div></div><form id="chatForm"><textarea id="messageInput" placeholder="Напишите сообщение администратору…" rows="2" maxlength="5000" required></textarea><button id="sendBtn" type="submit">Отправить ➤</button></form><div id="notice" aria-live="polite"></div></section></main><script>
-const token=new URLSearchParams(location.search).get('token'),$=id=>document.getElementById(id);let busy=false,loading=false,lastSignature='',timer=null,lastAdminIds=new Set(),audioCtx=null;
-function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function beep(){try{audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext)();if(audioCtx.state==='suspended')audioCtx.resume();const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.connect(g);g.connect(audioCtx.destination);o.frequency.value=880;g.gain.setValueAtTime(.001,audioCtx.currentTime);g.gain.exponentialRampToValueAtTime(.12,audioCtx.currentTime+.02);g.gain.exponentialRampToValueAtTime(.001,audioCtx.currentTime+.25);o.start();o.stop(audioCtx.currentTime+.26)}catch{}}
-async function api(url,options={}){const res=await fetch(url,{credentials:'same-origin',...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});const data=await res.json().catch(()=>({}));if(!res.ok||data.ok===false)throw Error(data.error||data.message||'Ошибка сервера');return data}
-function showDetails(r){const fields=[['Номер заявки',r.id??r.request_id],['Техника',r.equipment||r.equipment_name||r.equipment_id],['Длительность',r.duration||r.rental_duration],['Адрес',r.address||r.delivery_address],['Прибытие',r.arrival||r.arrival_type],['Пожелания',r.wishes||r.comment]];$('details').innerHTML=fields.map(([k,v])=>`<div class="detail"><div class="label">${esc(k)}</div><div class="value">${esc(v||'—')}</div></div>`).join('');$('status').textContent='Статус: '+(r.status||'Новая')}
-function showMessages(list){list=Array.isArray(list)?list:[];const signature=JSON.stringify(list);if(signature===lastSignature)return;const box=$('messages'),atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<60,oldTop=box.scrollTop;const incoming=list.filter(m=>(m.from==='admin'||m.sender==='admin'||m.role==='admin'||m.isAdmin===true)&&!lastAdminIds.has(String(m.id)));if(lastSignature&&incoming.length)beep();list.forEach(m=>{if(m.from==='admin'||m.sender==='admin'||m.role==='admin'||m.isAdmin===true)lastAdminIds.add(String(m.id))});lastSignature=signature;if(!list.length){box.innerHTML='<div class="empty">Сообщений пока нет. Можете написать администратору ниже.</div>';return}box.innerHTML=list.map(m=>{const admin=m.from==='admin'||m.sender==='admin'||m.role==='admin'||m.isAdmin===true,text=m.text??m.message??m.content??'',date=m.createdAt||m.created_at||m.date;let time='';if(date){const d=new Date(date);if(!isNaN(d))time=' · '+d.toLocaleString('ru-RU')}return `<div class="message ${admin?'':'mine'}"><div class="meta">${admin?'Администратор':'Вы'}${esc(time)}</div>${esc(text)}</div>`}).join('');box.scrollTop=atBottom?box.scrollHeight:oldTop}
-async function loadStatus(){if(!token){$('pageError').textContent='В ссылке отсутствует токен заявки. Откройте ссылку, полученную после оформления заказа.';return}if(loading)return;loading=true;try{const data=await api('/api/requests/status/'+encodeURIComponent(token));const r=data.request||data.data?.request||data.data||data;if(!r||typeof r!=='object')throw Error('Не удалось получить данные заявки');showDetails(r);showMessages(data.messages||r.messages||[]);$('pageError').textContent='';localStorage.setItem('excavator_last_token',token)}catch(err){$('pageError').textContent='Не удалось загрузить заявку: '+err.message}finally{loading=false}}
-$('chatForm').addEventListener('submit',async e=>{e.preventDefault();if(busy)return;const input=$('messageInput'),message=input.value.trim();if(!message)return;if(!token){$('notice').textContent='Нет токена заявки в ссылке.';return}busy=true;$('sendBtn').disabled=true;$('notice').textContent='Отправляем сообщение…';$('notice').classList.remove('error');try{await api('/api/requests/status/'+encodeURIComponent(token)+'/messages',{method:'POST',body:JSON.stringify({message,text:message})});input.value='';$('notice').textContent='Сообщение отправлено.';lastSignature='';await loadStatus()}catch(err){$('notice').textContent='Не удалось отправить сообщение: '+err.message;$('notice').classList.add('error')}finally{busy=false;$('sendBtn').disabled=false}});
-loadStatus();timer=setInterval(loadStatus,2500);window.addEventListener('beforeunload',()=>{if(timer)clearInterval(timer)});
-</script></body></html>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Моя заявка — Аренда спецтехники</title>
+
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  min-height:100vh;
+  padding:22px;
+  color:#edf3ff;
+  font-family:Segoe UI,Arial,sans-serif;
+  background:
+    radial-gradient(ellipse at 10% 0%,#1b3658,transparent 40%),
+    radial-gradient(ellipse at 95% 15%,#35274c,transparent 30%),
+    #0b1120
+}
+main{max-width:850px;margin:25px auto}
+.panel{
+  background:linear-gradient(145deg,#18243a,#111a2b);
+  border:1px solid #2b3a53;
+  border-radius:18px;
+  padding:22px;
+  margin-bottom:18px;
+  box-shadow:0 12px 35px #0002
+}
+h1{font-size:25px;margin:0 0 8px}
+h2{font-size:18px;margin:0}
+p,.muted{color:#9aabc5;font-size:14px}
+.tag{
+  display:inline-block;
+  padding:7px 11px;
+  border-radius:20px;
+  background:#283650;
+  font-size:13px;
+  margin-top:10px
+}
+.details{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+  margin-top:18px
+}
+.detail{
+  background:#0c1525;
+  border:1px solid #26354b;
+  border-radius:12px;
+  padding:13px;
+  min-width:0
+}
+.label{
+  font-size:11px;
+  color:#9aabc5;
+  text-transform:uppercase;
+  margin-bottom:7px
+}
+.value{overflow-wrap:anywhere;white-space:pre-wrap}
+.chat{padding:0;overflow:hidden}
+.chat-head{
+  background:#19263b;
+  border-bottom:1px solid #2b3a53;
+  padding:17px
+}
+.messages{
+  height:350px;
+  overflow-y:auto;
+  padding:16px;
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  background:#0c1525
+}
+.message{
+  max-width:88%;
+  align-self:flex-start;
+  background:#1b2a40;
+  border:1px solid #2b3a53;
+  padding:12px 14px;
+  border-radius:13px;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere
+}
+.message.mine{
+  align-self:flex-end;
+  background:#263b25;
+  border-color:#365a39
+}
+.meta{font-size:11px;color:#9aabc5;margin-bottom:6px}
+.empty{text-align:center;color:#9aabc5;padding:30px 10px}
+form{
+  display:flex;
+  gap:10px;
+  padding:14px;
+  border-top:1px solid #2b3a53;
+  align-items:flex-end
+}
+textarea{
+  flex:1;
+  min-width:0;
+  resize:vertical;
+  min-height:48px;
+  max-height:160px;
+  background:#0c1525;
+  color:#edf3ff;
+  border:1px solid #34445e;
+  border-radius:10px;
+  padding:13px;
+  font:inherit
+}
+button{
+  border:0;
+  border-radius:10px;
+  padding:14px 17px;
+  background:#f5b82e;
+  color:#201707;
+  font-weight:700;
+  cursor:pointer;
+  min-height:48px
+}
+button:disabled{opacity:.5;cursor:wait}
+#notice{padding:0 15px 13px;color:#9aabc5;font-size:13px}
+.error{color:#fb7185!important}
+.success{color:#86efac!important}
+.toplink{
+  display:inline-block;
+  margin-bottom:15px;
+  color:#93c5fd;
+  text-decoration:none
+}
+@media(max-width:560px){
+  body{padding:12px}
+  main{margin:10px auto}
+  .panel{padding:16px}
+  .details{grid-template-columns:1fr}
+  .messages{height:330px}
+  form{flex-direction:column;align-items:stretch}
+  button{width:100%}
+}
+</style>
+</head>
+
+<body>
+<main>
+  <a class="toplink" href="/">← На главную</a>
+
+  <section class="panel">
+    <h1>Моя заявка</h1>
+    <p>Здесь можно посмотреть информацию о заказе и связаться с администратором.</p>
+    <div id="status" class="tag">Загружаем статус…</div>
+    <div id="details" class="details"></div>
+    <div id="pageError" class="muted" role="status" aria-live="polite"></div>
+  </section>
+
+  <section class="panel chat">
+    <div class="chat-head">
+      <h2>💬 Чат с администратором</h2>
+      <p style="margin-bottom:0">
+        Напишите сообщение — администратор увидит его в панели управления.
+      </p>
+    </div>
+
+    <div id="messages" class="messages">
+      <div class="empty">Загружаем переписку…</div>
+    </div>
+
+    <form id="chatForm">
+      <textarea
+        id="messageInput"
+        placeholder="Напишите сообщение администратору…"
+        rows="2"
+        maxlength="5000"
+        required
+      ></textarea>
+      <button id="sendBtn" type="submit">Отправить ➤</button>
+    </form>
+
+    <div id="notice" aria-live="polite"></div>
+  </section>
+</main>
+
+<script>
+'use strict';
+
+const params = new URLSearchParams(window.location.search);
+const token = (params.get('token') || '').trim();
+
+const $ = id => document.getElementById(id);
+
+let busy = false;
+let loading = false;
+let lastSignature = '';
+let timer = null;
+let lastAdminIds = new Set();
+let audioCtx = null;
+let hasLoadedSuccessfully = false;
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[char]);
+}
+
+function isAdminMessage(message) {
+  return message.from === 'admin' ||
+    message.sender === 'admin' ||
+    message.role === 'admin' ||
+    message.isAdmin === true;
+}
+
+function beep() {
+  try {
+    const AudioContextClass =
+      window.AudioContext || window.webkitAudioContext;
+
+    if (!AudioContextClass) return;
+
+    audioCtx = audioCtx || new AudioContextClass();
+
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+
+    const oscillator = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    oscillator.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    oscillator.frequency.value = 880;
+
+    gain.gain.setValueAtTime(0.001, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(
+      0.12, audioCtx.currentTime + 0.02
+    );
+    gain.gain.exponentialRampToValueAtTime(
+      0.001, audioCtx.currentTime + 0.25
+    );
+
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + 0.26);
+  } catch (error) {
+    // Звук необязателен; его ошибка не должна ломать страницу.
+  }
+}
+
+async function api(url, options = {}) {
+  const response = await fetch(url, {
+    credentials: 'same-origin',
+    cache: 'no-store',
+    ...options,
+    headers: {
+      ...(options.body ? {'Content-Type': 'application/json'} : {}),
+      ...(options.headers || {})
+    }
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || data.ok === false) {
+    if (response.status === 404) {
+      throw new Error(
+        data.error || 'Заявка не найдена. Проверьте ссылку из сообщения после оформления.'
+      );
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(
+        data.error || 'Сервер отклонил запрос. Проверьте ссылку на заявку.'
+      );
+    }
+
+    throw new Error(
+      data.error || data.message || `Ошибка сервера (${response.status})`
+    );
+  }
+
+  return data;
+}
+
+function showDetails(request) {
+  const fields = [
+    ['Номер заявки', request.id ?? request.request_id],
+    ['Техника', request.equipment || request.equipment_name || request.equipment_id],
+    ['Длительность', request.duration || request.rental_duration],
+    ['Адрес', request.address || request.delivery_address],
+    ['Прибытие', request.arrival || request.arrival_type || request.arrival_date],
+    ['Пожелания', request.wishes || request.comment || request.message]
+  ];
+
+  $('details').innerHTML = fields.map(([label, value]) => `
+    <div class="detail">
+      <div class="label">${escapeHtml(label)}</div>
+      <div class="value">${escapeHtml(value || '—')}</div>
+    </div>
+  `).join('');
+
+  $('status').textContent = 'Статус: ' + (request.status || 'Новая');
+}
+
+function showMessages(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  const signature = JSON.stringify(list);
+
+  if (signature === lastSignature) return;
+
+  const box = $('messages');
+  const atBottom =
+    box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  const oldTop = box.scrollTop;
+
+  const incoming = list.filter(message =>
+    isAdminMessage(message) &&
+    !lastAdminIds.has(String(message.id))
+  );
+
+  if (hasLoadedSuccessfully && incoming.length > 0) {
+    beep();
+  }
+
+  list.forEach(message => {
+    if (isAdminMessage(message)) {
+      lastAdminIds.add(String(message.id));
+    }
+  });
+
+  lastSignature = signature;
+
+  if (list.length === 0) {
+    box.innerHTML = `
+      <div class="empty">
+        Сообщений пока нет. Можете написать администратору ниже.
+      </div>
+    `;
+    return;
+  }
+
+  box.innerHTML = list.map(message => {
+    const admin = isAdminMessage(message);
+    const text = message.text ?? message.message ?? message.content ?? '';
+    const date = message.createdAt || message.created_at || message.date;
+
+    let time = '';
+
+    if (date) {
+      const parsedDate = new Date(date);
+
+      if (!Number.isNaN(parsedDate.getTime())) {
+        time = ' · ' + parsedDate.toLocaleString('ru-RU');
+      }
+    }
+
+    return `
+      <div class="message ${admin ? '' : 'mine'}">
+        <div class="meta">${admin ? 'Администратор' : 'Вы'}${escapeHtml(time)}</div>
+        ${escapeHtml(text)}
+      </div>
+    `;
+  }).join('');
+
+  box.scrollTop = atBottom ? box.scrollHeight : oldTop;
+}
+
+async function loadStatus() {
+  if (!token) {
+    $('status').textContent = 'Ссылка неполная';
+    $('pageError').textContent =
+      'В ссылке отсутствует токен заявки. Откройте персональную ссылку, полученную после оформления заказа.';
+    $('messages').innerHTML = `
+      <div class="empty">Чтобы открыть чат, нужна персональная ссылка на заявку.</div>
+    `;
+    return;
+  }
+
+  if (loading) return;
+
+  loading = true;
+
+  try {
+    const data = await api(
+      '/api/requests/status/' + encodeURIComponent(token)
+    );
+
+    const request =
+      data.request ||
+      data.data?.request ||
+      data.data ||
+      data;
+
+    if (!request || typeof request !== 'object' || !request.id) {
+      throw new Error('Сервер не вернул корректные данные заявки.');
+    }
+
+    showDetails(request);
+    showMessages(data.messages || request.messages || []);
+
+    $('pageError').textContent = '';
+    hasLoadedSuccessfully = true;
+  } catch (error) {
+    $('pageError').textContent =
+      'Не удалось загрузить заявку: ' + error.message;
+
+    if (!hasLoadedSuccessfully) {
+      $('status').textContent = 'Не удалось загрузить заявку';
+    }
+  } finally {
+    loading = false;
+  }
+}
+
+$('chatForm').addEventListener('submit', async event => {
+  event.preventDefault();
+
+  if (busy) return;
+
+  const input = $('messageInput');
+  const message = input.value.trim();
+
+  if (!message) return;
+
+  if (!token) {
+    $('notice').textContent =
+      'Нет токена заявки в ссылке. Откройте персональную ссылку из подтверждения заказа.';
+    $('notice').classList.add('error');
+    return;
+  }
+
+  busy = true;
+  $('sendBtn').disabled = true;
+  $('notice').className = '';
+  $('notice').textContent = 'Отправляем сообщение…';
+
+  try {
+    await api(
+      '/api/requests/status/' + encodeURIComponent(token) + '/messages',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          message,
+          text: message
+        })
+      }
+    );
+
+    input.value = '';
+    $('notice').className = 'success';
+    $('notice').textContent = 'Сообщение отправлено.';
+
+    // Разрешаем повторно отобразить обновлённую переписку.
+    lastSignature = '';
+    await loadStatus();
+  } catch (error) {
+    $('notice').className = 'error';
+    $('notice').textContent =
+      'Не удалось отправить сообщение: ' + error.message;
+  } finally {
+    busy = false;
+    $('sendBtn').disabled = false;
+  }
+});
+
+loadStatus();
+
+timer = window.setInterval(loadStatus, 2500);
+
+window.addEventListener('beforeunload', () => {
+  if (timer) {
+    clearInterval(timer);
+  }
+});
+</script>
+</body>
+</html>
