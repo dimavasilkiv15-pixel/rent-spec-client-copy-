@@ -1,4 +1,4 @@
-
+```js
 require('dotenv').config();
 
 const express = require('express');
@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
-const PUBLIC_DIR = path.join(ROOT, 'public');
+const PUBLIC_DIR = ROOT;
 const DATA_DIR = path.join(ROOT, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
@@ -66,7 +66,42 @@ app.use(session({
   }
 }));
 
-app.use(express.static(PUBLIC_DIR));
+// Не позволяем посетителям загружать серверные файлы и базу данных.
+app.use((req, res, next) => {
+  let requestedPath;
+
+  try {
+    requestedPath = decodeURIComponent(req.path).replace(/^\/+/, '');
+  } catch {
+    return res.sendStatus(400);
+  }
+
+  const blocked =
+    requestedPath === 'server.js' ||
+    requestedPath === 'package.json' ||
+    requestedPath === 'package-lock.json' ||
+    requestedPath === '.env' ||
+    requestedPath.startsWith('.env.') ||
+    requestedPath === 'data' ||
+    requestedPath.startsWith('data/') ||
+    requestedPath === 'node_modules' ||
+    requestedPath.startsWith('node_modules/') ||
+    requestedPath === '.git' ||
+    requestedPath.startsWith('.git/');
+
+  if (blocked) {
+    return res.sendStatus(404);
+  }
+
+  next();
+});
+
+// HTML-страницы и изображения лежат в корне репозитория.
+app.use(express.static(PUBLIC_DIR, { index: false }));
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(ROOT, 'index.html'));
+});
 
 function readDb() {
   try {
@@ -127,6 +162,7 @@ function adminOnly(req, res, next) {
       error: 'Требуется вход администратора.'
     });
   }
+
   next();
 }
 
@@ -145,7 +181,7 @@ function notifyTelegram(message) {
   });
 }
 
-// Публичные данные
+// Публичные данные сайта.
 app.get('/api/public', (req, res) => {
   const db = readDb();
   const settings = db.settings;
@@ -159,7 +195,7 @@ app.get('/api/public', (req, res) => {
   });
 });
 
-// Создание заявки
+// Создание заявки.
 app.post('/api/requests', (req, res) => {
   const body = req.body || {};
   const name = String(body.name || body.customer || '').trim();
@@ -217,7 +253,7 @@ app.post('/api/requests', (req, res) => {
   });
 });
 
-// Статус заявки
+// Получение статуса заявки.
 app.get('/api/requests/status/:token', (req, res) => {
   const db = readDb();
   const request = db.requests.find(
@@ -243,7 +279,7 @@ app.get('/api/requests/status/:token', (req, res) => {
   });
 });
 
-// Сообщение клиента
+// Сообщение клиента.
 app.post('/api/requests/status/:token/messages', (req, res) => {
   const db = readDb();
   const request = db.requests.find(
@@ -282,7 +318,7 @@ app.post('/api/requests/status/:token/messages', (req, res) => {
   res.status(201).json({ ok: true, message });
 });
 
-// Вход администратора
+// Вход администратора.
 app.post('/api/admin/login', (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
@@ -331,7 +367,7 @@ app.post('/api/admin/login', (req, res) => {
   });
 });
 
-// Проверка входа
+// Проверка авторизации.
 app.get('/api/admin/me', (req, res) => {
   res.set('Cache-Control', 'no-store');
 
@@ -345,7 +381,7 @@ app.get('/api/admin/me', (req, res) => {
   res.json({ ok: true, username: req.session.username });
 });
 
-// Выход
+// Выход администратора.
 app.post('/api/admin/logout', (req, res) => {
   if (!req.session) {
     return res.json({ ok: true });
@@ -370,9 +406,10 @@ app.post('/api/admin/logout', (req, res) => {
   });
 });
 
-// Данные админ-панели
+// Данные админ-панели.
 app.get('/api/admin/data', adminOnly, (req, res) => {
   const db = readDb();
+
   const messages = db.messages.slice().sort(
     (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
   );
@@ -393,9 +430,10 @@ app.get('/api/admin/data', adminOnly, (req, res) => {
   });
 });
 
-// Ответ администратора
+// Ответ администратора на заявку.
 app.post('/api/admin/requests/:id/reply', adminOnly, (req, res) => {
   const db = readDb();
+
   const request = db.requests.find(
     item => String(item.id) === String(req.params.id)
   );
@@ -430,9 +468,10 @@ app.post('/api/admin/requests/:id/reply', adminOnly, (req, res) => {
   res.status(201).json({ ok: true, message });
 });
 
-// Изменение статуса
+// Изменение статуса заявки.
 app.patch('/api/admin/requests/:id', adminOnly, (req, res) => {
   const db = readDb();
+
   const request = db.requests.find(
     item => String(item.id) === String(req.params.id)
   );
@@ -459,7 +498,7 @@ app.patch('/api/admin/requests/:id', adminOnly, (req, res) => {
   res.json({ ok: true, request: safeRequest(request) });
 });
 
-// Удаление заявки
+// Удаление заявки.
 app.delete('/api/admin/requests/:id', adminOnly, (req, res) => {
   const db = readDb();
   const id = String(req.params.id);
@@ -484,7 +523,7 @@ app.delete('/api/admin/requests/:id', adminOnly, (req, res) => {
   res.json({ ok: true });
 });
 
-// Неизвестные маршруты
+// Неизвестные API-маршруты и страницы.
 app.use((req, res, next) => {
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({
@@ -493,18 +532,10 @@ app.use((req, res, next) => {
     });
   }
 
-  if (req.method === 'GET') {
-    const indexFile = path.join(PUBLIC_DIR, 'index.html');
-
-    if (fs.existsSync(indexFile)) {
-      return res.sendFile(indexFile);
-    }
-  }
-
   res.status(404).send('Страница не найдена.');
 });
 
-// Ошибки
+// Обработка ошибок.
 app.use((error, req, res, next) => {
   console.error('Server error:', error.message);
 
@@ -519,3 +550,4 @@ app.use((error, req, res, next) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server started on port ${PORT}`);
 });
+```
