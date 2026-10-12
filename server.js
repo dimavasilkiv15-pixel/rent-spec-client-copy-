@@ -11,12 +11,9 @@ const crypto = require('crypto');
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
-const PUBLIC_DIR = ROOT;
 const DATA_DIR = path.join(ROOT, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
-
 const SESSION_COOKIE_NAME = 'rent-spec.sid';
-const SESSION_MAX_AGE = 12 * 60 * 60 * 1000;
 
 app.disable('x-powered-by');
 
@@ -39,90 +36,6 @@ if (!fs.existsSync(DB_FILE)) {
   fs.writeFileSync(DB_FILE, JSON.stringify(emptyDb(), null, 2));
 }
 
-app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true }));
-
-const sessionSecret = process.env.SESSION_SECRET;
-
-if (!sessionSecret) {
-  console.error('SESSION_SECRET is not configured.');
-  process.exit(1);
-}
-
-app.use(session({
-  name: SESSION_COOKIE_NAME,
-  secret: sessionSecret,
-  resave: false,
-  saveUninitialized: false,
-  rolling: true,
-  proxy: process.env.NODE_ENV === 'production',
-  cookie: {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: SESSION_MAX_AGE,
-    path: '/'
-  }
-}));
-
-// Защита серверных файлов и базы данных.
-app.use((req, res, next) => {
-  let requestedPath;
-
-  try {
-    requestedPath = decodeURIComponent(req.path).replace(/^\/+/, '');
-  } catch {
-    return res.sendStatus(400);
-  }
-
-  const blocked =
-    requestedPath === 'server.js' ||
-    requestedPath === 'package.json' ||
-    requestedPath === 'package-lock.json' ||
-    requestedPath === '.env' ||
-    requestedPath.startsWith('.env.') ||
-    requestedPath === 'data' ||
-    requestedPath.startsWith('data/') ||
-    requestedPath === 'node_modules' ||
-    requestedPath.startsWith('node_modules/') ||
-    requestedPath === '.git' ||
-    requestedPath.startsWith('.git/');
-
-  if (blocked) {
-    return res.sendStatus(404);
-  }
-
-  next();
-});
-
-// Статические файлы сайта.
-app.use(express.static(PUBLIC_DIR, { index: false }));
-
-// Безопасная отправка HTML-файлов.
-function sendHtmlFile(filename, label) {
-  return (req, res) => {
-    const file = path.join(ROOT, filename);
-
-    if (!fs.existsSync(file)) {
-      return res.status(404).send(`Файл ${filename} не найден в репозитории.`);
-    }
-
-    res.sendFile(file, error => {
-      if (error && !res.headersSent) {
-        console.error(`${label} error:`, error.message);
-        res.status(500).send(`Не удалось открыть ${filename}.`);
-      }
-    });
-  };
-}
-
-app.get('/', sendHtmlFile('index.html', 'index.html'));
-app.get('/index.html', sendHtmlFile('index.html', 'index.html'));
-app.get('/admin.html', sendHtmlFile('admin.html', 'admin.html'));
-app.get('/status.html', sendHtmlFile('status.html', 'status.html'));
-
-// Чтение базы данных.
 function readDb() {
   try {
     const raw = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
@@ -142,7 +55,6 @@ function readDb() {
   }
 }
 
-// Запись базы данных.
 function writeDb(db) {
   const tempFile = DB_FILE + '.tmp';
   fs.writeFileSync(tempFile, JSON.stringify(db, null, 2));
@@ -176,8 +88,82 @@ function safeRequest(r) {
   };
 }
 
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+const sessionSecret =
+  process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+
+app.use(session({
+  name: SESSION_COOKIE_NAME,
+  secret: sessionSecret,
+  resave: false,
+  saveUninitialized: false,
+  rolling: true,
+  proxy: process.env.NODE_ENV === 'production',
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 12 * 60 * 60 * 1000,
+    path: '/'
+  }
+}));
+
+// Защита файлов сервера и базы данных.
+app.use((req, res, next) => {
+  let requestedPath;
+
+  try {
+    requestedPath = decodeURIComponent(req.path).replace(/^\/+/, '');
+  } catch {
+    return res.sendStatus(400);
+  }
+
+  const blocked = [
+    'server.js',
+    'package.json',
+    'package-lock.json',
+    '.env',
+    'data',
+    'node_modules',
+    '.git'
+  ].some(name =>
+    requestedPath === name ||
+    requestedPath.startsWith(name + '/') ||
+    (name === '.env' && requestedPath.startsWith('.env.'))
+  );
+
+  if (blocked) {
+    return res.sendStatus(404);
+  }
+
+  next();
+});
+
+// Статические файлы: HTML, CSS, JavaScript и изображения.
+app.use(express.static(ROOT, { index: false }));
+
+// HTML-страницы.
+app.get('/', (req, res) => {
+  res.sendFile(path.join(ROOT, 'index.html'));
+});
+
+app.get('/index.html', (req, res) => {
+  res.sendFile(path.join(ROOT, 'index.html'));
+});
+
+app.get('/admin.html', (req, res) => {
+  res.sendFile(path.join(ROOT, 'admin.html'));
+});
+
+app.get('/status.html', (req, res) => {
+  res.sendFile(path.join(ROOT, 'status.html'));
+});
+
 function adminOnly(req, res, next) {
-  if (!req.session?.isAdmin) {
+  if (!req.session || !req.session.isAdmin) {
     return res.status(401).json({
       ok: false,
       error: 'Требуется вход администратора.'
@@ -187,33 +173,28 @@ function adminOnly(req, res, next) {
   next();
 }
 
-// Публичные данные сайта.
+// Публичная информация.
 app.get('/api/public', (req, res) => {
-  try {
-    const db = readDb();
-    const settings = db.settings;
+  const db = readDb();
 
-    res.json({
-      siteName: settings.siteName || settings.site_name || 'Оренда спецтехніки',
-      city: settings.city || 'Україна',
-      equipment: db.equipment.filter(
-        item => String(item.status || '').toLowerCase() !== 'hidden'
-      )
-    });
-  } catch {
-    res.status(500).json({
-      ok: false,
-      error: 'Не удалось загрузить данные сайта.'
-    });
-  }
+  res.json({
+    siteName: db.settings.siteName || 'Оренда спецтехніки',
+    city: db.settings.city || 'Україна',
+    equipment: db.equipment.filter(
+      item => String(item.status || '').toLowerCase() !== 'hidden'
+    )
+  });
 });
 
-// Создание заявки.
+// Создание заявки с главной страницы.
 app.post('/api/requests', (req, res) => {
   const body = req.body || {};
+
   const name = String(body.name || body.customer || '').trim();
   const phone = String(body.phone || '').trim();
   const equipment = String(body.equipment || '').trim();
+  const duration = String(body.duration || body.rental_duration || '').trim();
+  const address = String(body.address || body.delivery_address || '').trim();
 
   if (!name || !phone || (!equipment && !body.equipment_id)) {
     return res.status(400).json({
@@ -222,132 +203,109 @@ app.post('/api/requests', (req, res) => {
     });
   }
 
-  try {
-    const db = readDb();
+  const db = readDb();
 
-    const request = {
-      id: makeId(),
-      name,
-      customer: name,
-      phone,
-      equipment,
-      equipment_id: body.equipment_id || null,
-      duration: String(body.duration || body.rental_duration || ''),
-      rental_duration: String(body.rental_duration || body.duration || ''),
-      address: String(body.address || body.delivery_address || ''),
-      delivery_address: String(body.delivery_address || body.address || ''),
-      arrival: String(body.arrival || ''),
-      arrival_type: String(body.arrival_type || ''),
-      arrival_date: String(body.arrival_date || ''),
-      wishes: String(body.wishes || body.message || ''),
-      message: String(body.message || body.wishes || ''),
-      status: 'Новая',
-      createdAt: new Date().toISOString(),
-      public_token: crypto.randomBytes(24).toString('hex')
-    };
+  const request = {
+    id: makeId(),
+    name,
+    customer: name,
+    phone,
+    equipment,
+    equipment_id: body.equipment_id || null,
+    duration,
+    rental_duration: duration,
+    address,
+    delivery_address: address,
+    arrival: String(body.arrival || ''),
+    arrival_type: String(body.arrival_type || ''),
+    arrival_date: String(body.arrival_date || ''),
+    wishes: String(body.wishes || body.message || ''),
+    message: String(body.message || body.wishes || ''),
+    status: 'Новая',
+    createdAt: new Date().toISOString(),
+    public_token: crypto.randomBytes(24).toString('hex')
+  };
 
-    db.requests.unshift(request);
-    writeDb(db);
+  db.requests.unshift(request);
+  writeDb(db);
 
-    const base = (
-      process.env.SITE_URL || `${req.protocol}://${req.get('host')}`
-    ).replace(/\/+$/, '');
+  const base = (
+    process.env.SITE_URL || req.protocol + '://' + req.get('host')
+  ).replace(/\/+$/, '');
 
-    const statusUrl =
-      `${base}/status.html?token=${encodeURIComponent(request.public_token)}`;
+  const statusUrl =
+    base + '/status.html?token=' + encodeURIComponent(request.public_token);
 
-    res.status(201).json({
-      ok: true,
-      request: safeRequest(request),
-      statusUrl
-    });
-  } catch (error) {
-    console.error('Create request error:', error.message);
-    res.status(500).json({
-      ok: false,
-      error: 'Не удалось сохранить заявку.'
-    });
-  }
+  res.status(201).json({
+    ok: true,
+    request: safeRequest(request),
+    statusUrl
+  });
 });
 
-// Получение статуса заявки.
+// Получение статуса и сообщений клиента.
 app.get('/api/requests/status/:token', (req, res) => {
-  try {
-    const db = readDb();
-    const request = db.requests.find(
-      item => item.public_token === req.params.token
-    );
+  const db = readDb();
 
-    if (!request) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Заявка не найдена.'
-      });
-    }
+  const request = db.requests.find(
+    item => item.public_token === req.params.token
+  );
 
-    const messages = db.messages
-      .filter(item => String(item.requestId) === String(request.id))
-      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-
-    res.set('Cache-Control', 'no-store');
-    res.json({
-      ok: true,
-      request: { ...safeRequest(request), messages },
-      messages,
-      statusLabel: request.status || 'Новая'
-    });
-  } catch (error) {
-    console.error('Get request status error:', error.message);
-    res.status(500).json({
+  if (!request) {
+    return res.status(404).json({
       ok: false,
-      error: 'Не удалось загрузить статус заявки.'
+      error: 'Заявка не найдена.'
     });
   }
+
+  const messages = db.messages
+    .filter(item => String(item.requestId) === String(request.id))
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  res.json({
+    ok: true,
+    request: { ...safeRequest(request), messages },
+    messages,
+    statusLabel: request.status || 'Новая'
+  });
 });
 
 // Сообщение клиента.
 app.post('/api/requests/status/:token/messages', (req, res) => {
+  const db = readDb();
+
+  const request = db.requests.find(
+    item => item.public_token === req.params.token
+  );
+
+  if (!request) {
+    return res.status(404).json({
+      ok: false,
+      error: 'Заявка не найдена.'
+    });
+  }
+
   const text = String(req.body?.text || req.body?.message || '').trim();
 
   if (!text || text.length > 5000) {
     return res.status(400).json({
       ok: false,
-      error: 'Введите сообщение длиной до 5000 символов.'
+      error: 'Введіть повідомлення довжиною до 5000 символів.'
     });
   }
 
-  try {
-    const db = readDb();
-    const request = db.requests.find(
-      item => item.public_token === req.params.token
-    );
+  const message = {
+    id: makeId(),
+    requestId: request.id,
+    from: 'client',
+    text,
+    createdAt: new Date().toISOString()
+  };
 
-    if (!request) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Заявка не найдена.'
-      });
-    }
+  db.messages.push(message);
+  writeDb(db);
 
-    const message = {
-      id: makeId(),
-      requestId: request.id,
-      from: 'client',
-      text,
-      createdAt: new Date().toISOString()
-    };
-
-    db.messages.push(message);
-    writeDb(db);
-
-    res.status(201).json({ ok: true, message });
-  } catch (error) {
-    console.error('Client message error:', error.message);
-    res.status(500).json({
-      ok: false,
-      error: 'Не удалось отправить сообщение.'
-    });
-  }
+  res.status(201).json({ ok: true, message });
 });
 
 // Вход администратора.
@@ -371,16 +329,15 @@ app.post('/api/admin/login', (req, res) => {
   if (username !== expectedUser || password !== expectedPass) {
     return res.status(401).json({
       ok: false,
-      error: 'Неверный логин или пароль.'
+      error: 'Невірний логін або пароль.'
     });
   }
 
   req.session.regenerate(error => {
     if (error) {
-      console.error('Session regenerate error:', error.message);
       return res.status(500).json({
         ok: false,
-        error: 'Ошибка создания сессии.'
+        error: 'Помилка створення сесії.'
       });
     }
 
@@ -389,10 +346,9 @@ app.post('/api/admin/login', (req, res) => {
 
     req.session.save(saveError => {
       if (saveError) {
-        console.error('Session save error:', saveError.message);
         return res.status(500).json({
           ok: false,
-          error: 'Ошибка сохранения сессии.'
+          error: 'Помилка збереження сесії.'
         });
       }
 
@@ -402,14 +358,14 @@ app.post('/api/admin/login', (req, res) => {
   });
 });
 
-// Проверка авторизации.
+// Проверка входа администратора.
 app.get('/api/admin/me', (req, res) => {
   res.set('Cache-Control', 'no-store');
 
   if (!req.session?.isAdmin) {
     return res.status(401).json({
       ok: false,
-      error: 'Не выполнен вход.'
+      error: 'Не виконано вхід.'
     });
   }
 
@@ -424,10 +380,9 @@ app.post('/api/admin/logout', (req, res) => {
 
   req.session.destroy(error => {
     if (error) {
-      console.error('Session destroy error:', error.message);
       return res.status(500).json({
         ok: false,
-        error: 'Не удалось завершить сессию.'
+        error: 'Не вдалося завершити сесію.'
       });
     }
 
@@ -444,165 +399,134 @@ app.post('/api/admin/logout', (req, res) => {
 
 // Данные админ-панели.
 app.get('/api/admin/data', adminOnly, (req, res) => {
-  try {
-    const db = readDb();
+  const db = readDb();
 
-    const messages = db.messages.slice().sort(
-      (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
-    );
+  const messages = db.messages.slice().sort(
+    (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
+  );
 
-    const requests = db.requests.map(request => ({
-      ...safeRequest(request),
-      messages: messages.filter(
-        message => String(message.requestId) === String(request.id)
-      )
-    }));
+  const requests = db.requests.map(request => ({
+    ...safeRequest(request),
+    messages: messages.filter(
+      message => String(message.requestId) === String(request.id)
+    )
+  }));
 
-    res.set('Cache-Control', 'no-store');
-    res.json({
-      ok: true,
-      requests,
-      messages,
-      equipment: db.equipment,
-      settings: db.settings
-    });
-  } catch (error) {
-    console.error('Admin data error:', error.message);
-    res.status(500).json({
-      ok: false,
-      error: 'Не удалось загрузить данные админ-панели.'
-    });
-  }
+  res.json({
+    ok: true,
+    requests,
+    messages,
+    equipment: db.equipment,
+    settings: db.settings
+  });
 });
 
-// Ответ администратора на заявку.
+// Ответ администратора.
 app.post('/api/admin/requests/:id/reply', adminOnly, (req, res) => {
+  const db = readDb();
+
+  const request = db.requests.find(
+    item => String(item.id) === String(req.params.id)
+  );
+
+  if (!request) {
+    return res.status(404).json({
+      ok: false,
+      error: 'Заявка не найдена.'
+    });
+  }
+
   const text = String(req.body?.text || req.body?.message || '').trim();
 
   if (!text || text.length > 5000) {
     return res.status(400).json({
       ok: false,
-      error: 'Введите сообщение длиной до 5000 символов.'
+      error: 'Введіть повідомлення довжиною до 5000 символів.'
     });
   }
 
-  try {
-    const db = readDb();
-    const request = db.requests.find(
-      item => String(item.id) === String(req.params.id)
-    );
+  const message = {
+    id: makeId(),
+    requestId: request.id,
+    from: 'admin',
+    text,
+    createdAt: new Date().toISOString()
+  };
 
-    if (!request) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Заявка не найдена.'
-      });
-    }
+  db.messages.push(message);
+  writeDb(db);
 
-    const message = {
-      id: makeId(),
-      requestId: request.id,
-      from: 'admin',
-      text,
-      createdAt: new Date().toISOString()
-    };
-
-    db.messages.push(message);
-    writeDb(db);
-
-    res.status(201).json({ ok: true, message });
-  } catch (error) {
-    console.error('Admin reply error:', error.message);
-    res.status(500).json({
-      ok: false,
-      error: 'Не удалось отправить ответ.'
-    });
-  }
+  res.status(201).json({ ok: true, message });
 });
 
 // Изменение статуса заявки.
 app.patch('/api/admin/requests/:id', adminOnly, (req, res) => {
+  const db = readDb();
+
+  const request = db.requests.find(
+    item => String(item.id) === String(req.params.id)
+  );
+
+  if (!request) {
+    return res.status(404).json({
+      ok: false,
+      error: 'Заявка не найдена.'
+    });
+  }
+
   const status = String(req.body?.status || '').trim();
 
   if (!status) {
     return res.status(400).json({
       ok: false,
-      error: 'Не указан статус.'
+      error: 'Не вказано статус.'
     });
   }
 
-  try {
-    const db = readDb();
-    const request = db.requests.find(
-      item => String(item.id) === String(req.params.id)
-    );
+  request.status = status;
+  writeDb(db);
 
-    if (!request) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Заявка не найдена.'
-      });
-    }
-
-    request.status = status;
-    writeDb(db);
-
-    res.json({ ok: true, request: safeRequest(request) });
-  } catch (error) {
-    console.error('Update request error:', error.message);
-    res.status(500).json({
-      ok: false,
-      error: 'Не удалось обновить заявку.'
-    });
-  }
+  res.json({ ok: true, request: safeRequest(request) });
 });
 
 // Удаление заявки.
 app.delete('/api/admin/requests/:id', adminOnly, (req, res) => {
-  try {
-    const db = readDb();
-    const id = String(req.params.id);
-    const count = db.requests.length;
+  const db = readDb();
+  const id = String(req.params.id);
+  const previousCount = db.requests.length;
 
-    db.requests = db.requests.filter(
-      request => String(request.id) !== id
-    );
+  db.requests = db.requests.filter(
+    request => String(request.id) !== id
+  );
 
-    if (db.requests.length === count) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Заявка не найдена.'
-      });
-    }
-
-    db.messages = db.messages.filter(
-      message => String(message.requestId) !== id
-    );
-
-    writeDb(db);
-    res.json({ ok: true });
-  } catch (error) {
-    console.error('Delete request error:', error.message);
-    res.status(500).json({
+  if (db.requests.length === previousCount) {
+    return res.status(404).json({
       ok: false,
-      error: 'Не удалось удалить заявку.'
+      error: 'Заявка не найдена.'
     });
   }
+
+  db.messages = db.messages.filter(
+    message => String(message.requestId) !== id
+  );
+
+  writeDb(db);
+  res.json({ ok: true });
 });
 
-// Неизвестные API-маршруты и страницы.
+// Неизвестные маршруты.
 app.use((req, res) => {
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({
       ok: false,
-      error: 'API-маршрут не найден.'
+      error: 'API-маршрут не знайдено.'
     });
   }
 
-  res.status(404).send('Страница не найдена: ' + req.path);
+  res.status(404).send('Сторінку не знайдено: ' + req.path);
 });
 
-// Общая обработка ошибок.
+// Обработка серверных ошибок.
 app.use((error, req, res, next) => {
   console.error('Server error:', error.message);
 
@@ -612,11 +536,11 @@ app.use((error, req, res, next) => {
 
   res.status(500).json({
     ok: false,
-    error: 'Внутренняя ошибка сервера.'
+    error: 'Внутрішня помилка сервера.'
   });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server started on port ${PORT}`);
+  console.log('RENT SPEC server started on port ' + PORT);
 });
 ```
