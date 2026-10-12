@@ -1,4 +1,4 @@
-
+```html
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -44,7 +44,7 @@ select,input,textarea{width:100%;color:var(--text);background:#0c1525;border:1px
 .chat{margin-top:15px;border:1px solid var(--line);border-radius:15px;overflow:hidden;background:#0c1525}
 .chat-head{padding:14px 16px;background:#19263b;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px}
 .chat-head h3{margin:0;font-size:15px}
-.messages{padding:16px;display:flex;flex-direction:column;gap:12px;max-height:360px;min-height:90px;overflow-y:auto;overflow-anchor:none;overscroll-behavior:contain}
+.messages{padding:16px;display:flex;flex-direction:column;gap:12px;max-height:360px;min-height:90px;overflow-y:auto;overflow-anchor:none;overscroll-behavior:contain;scroll-behavior:auto}
 .message{max-width:88%;padding:11px 13px;border-radius:13px;background:#1b2a40;align-self:flex-start;overflow-wrap:anywhere;white-space:pre-wrap}
 .message.admin{background:#263b25;align-self:flex-end;border:1px solid #365a39}
 .message-meta{font-size:11px;color:var(--muted);margin-bottom:6px}
@@ -352,40 +352,24 @@ $('adminUnread').textContent=n;
 $('adminUnread').classList.toggle('hidden',n===0)
 }
 
-/*
- * Главное исправление:
- * сохраняем прокрутку всех чатов и страницы до обновления,
- * а после обновления возвращаем её на прежнее место.
- * Если пользователь был внизу переписки — остаёмся внизу.
- * Если он читал старые сообщения — не перематываем его.
- * Также сохраняем фокус и позицию курсора в поле ввода.
- */
+/* Обновляет только сообщения внутри существующего блока.
+   Сам блок и поля ввода при этом не пересоздаются. */
+function updateMessagesBox(box,r){
+if(!box)return;
+const nextHtml=renderMessages(r);
+if(box.innerHTML===nextHtml)return;
+
+const oldTop=box.scrollTop;
+const wasAtBottom=box.scrollHeight-box.scrollTop-box.clientHeight<40;
+box.innerHTML=nextHtml;
+
+box.scrollTop=wasAtBottom
+?box.scrollHeight
+:Math.min(oldTop,Math.max(0,box.scrollHeight-box.clientHeight))
+}
+
 function render(data){
 const pageScrollY=window.scrollY;
-const scrollPositions=new Map();
-
-document.querySelectorAll('.messages').forEach(box=>{
-scrollPositions.set(box.id,{
-top:box.scrollTop,
-atBottom:box.scrollHeight-box.scrollTop-box.clientHeight<40
-})
-});
-
-const current=document.activeElement;
-let focusInfo=null;
-
-if(current&&(
-current.matches('textarea[data-draft]')||
-current.matches('select[data-status]')
-)){
-focusInfo={
-id:current.id,
-isTextarea:current.matches('textarea'),
-start:current.matches('textarea')?current.selectionStart:null,
-end:current.matches('textarea')?current.selectionEnd:null
-}
-}
-
 requestsCache=data;
 
 $('totalCount').textContent=data.length;
@@ -393,43 +377,56 @@ $('newCount').textContent=data.filter(r=>getStatus(r)==='Новая'||getStatus(
 $('workCount').textContent=data.filter(r=>['Связались','Подтверждена','in_progress'].includes(getStatus(r))).length;
 $('lastUpdated').textContent='Обновлено: '+new Date().toLocaleTimeString('ru-RU');
 
-document.querySelectorAll('textarea[data-draft]').forEach(el=>{
-drafts[el.dataset.draft]=el.value
-});
-
-document.querySelectorAll('select[data-status]').forEach(el=>{
-pendingStatuses[el.dataset.status]=el.value
-});
-
+const current=document.activeElement;
 const editing=!!(current&&(
 current.matches('textarea[data-draft]')||
 current.matches('select[data-status]')
 ));
 
-if(!editing){
+/* Пока пользователь печатает или меняет статус, не перестраиваем
+   ни заявки, ни список чатов. Обновляем только сообщения.
+   Благодаря этому поле ввода не теряет фокус и прокрутку. */
+if(editing){
+document.querySelectorAll('textarea[data-draft]').forEach(el=>{
+drafts[el.dataset.draft]=el.value
+});
+document.querySelectorAll('select[data-status]').forEach(el=>{
+pendingStatuses[el.dataset.status]=el.value
+});
+
+data.forEach(r=>{
+const id=requestId(r);
+updateMessagesBox($('messages-'+id),r);
+updateMessagesBox($('chat-messages-'+id),r)
+});
+
+updateUnreadBadge();
+window.scrollTo(0,pageScrollY);
+return
+}
+
+/* Сохраняем черновики перед обновлением интерфейса. */
+document.querySelectorAll('textarea[data-draft]').forEach(el=>{
+drafts[el.dataset.draft]=el.value
+});
+document.querySelectorAll('select[data-status]').forEach(el=>{
+pendingStatuses[el.dataset.status]=el.value
+});
+
+/* Запоминаем положение прокрутки всех открытых переписок. */
+const scrollPositions=new Map();
+document.querySelectorAll('.messages').forEach(box=>{
+scrollPositions.set(box.id,{
+top:box.scrollTop,
+atBottom:box.scrollHeight-box.scrollTop-box.clientHeight<40
+})
+});
+
+/* Перестраиваем заявки и чаты только когда пользователь не редактирует поля. */
 $('requests').innerHTML=data.length
 ?data.map(cardHtml).join('')
 :'<div class="card empty">Пока нет заявок. Когда клиент отправит заявку, она появится здесь.</div>';
-bindInputs()
-}else{
-/* Не перестраиваем карточки заявок, пока пользователь печатает
-   или меняет статус. Обновляем только содержимое сообщений. */
-data.forEach(r=>{
-const id=requestId(r);
-const box=$('messages-'+id);
-if(box){
-const saved=scrollPositions.get(box.id);
-box.innerHTML=renderMessages(r);
-if(saved){
-box.scrollTop=saved.atBottom
-?box.scrollHeight
-:Math.min(saved.top,Math.max(0,box.scrollHeight-box.clientHeight))
-}
-}
-})
-}
 
-/* Перестраиваем список чатов, затем восстанавливаем открытые переписки. */
 $('chats').innerHTML=data.length
 ?data.map(chatHtml).join('')
 :'<div class="card empty">Чатов пока нет.</div>';
@@ -439,44 +436,20 @@ const detail=$('chat-detail-'+id);
 if(detail)detail.classList.remove('hidden')
 });
 
+bindInputs();
 bindChatForms();
 
-/* Возвращаем прокрутку каждого блока сообщений. */
+/* Возвращаем прокрутку переписок на прежнее место. */
 scrollPositions.forEach((saved,id)=>{
 const box=$(id);
 if(!box)return;
-
 box.scrollTop=saved.atBottom
 ?box.scrollHeight
 :Math.min(saved.top,Math.max(0,box.scrollHeight-box.clientHeight))
 });
 
-/* Возвращаем фокус и курсор в поле, если оно было активно. */
-if(focusInfo&&focusInfo.id){
-const field=$(focusInfo.id);
-if(field){
-field.focus({preventScroll:true});
-
-if(
-focusInfo.isTextarea&&
-focusInfo.start!==null&&
-focusInfo.end!==null
-){
-try{
-const length=field.value.length;
-field.setSelectionRange(
-Math.min(focusInfo.start,length),
-Math.min(focusInfo.end,length)
-)
-}catch{}
-}
-}
-}
-
 updateUnreadBadge();
-
-/* Не позволяем автообновлению сдвигать всю страницу. */
-window.scrollTo({top:pageScrollY,behavior:'instant'})
+window.scrollTo(0,pageScrollY)
 }
 
 function bindInputs(){
@@ -520,7 +493,7 @@ JSON.parse(localStorage.getItem('excavator_admin_seen')||'[]').forEach(x=>seenAd
 }catch{}
 initialMessageLoad=false
 }else{
-let incoming=[];
+const incoming=[];
 data.forEach(r=>(r.messages||[]).forEach(m=>{
 if(!isAdmin(m)&&!seenAdminMessages.has(String(m.id)))incoming.push(m)
 }));
@@ -630,4 +603,4 @@ audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext)()
 </script>
 </body>
 </html>
-
+```
