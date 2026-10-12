@@ -1,4 +1,4 @@
-```js
+
 require('dotenv').config();
 
 const express = require('express');
@@ -66,7 +66,7 @@ app.use(session({
   }
 }));
 
-// Не позволяем посетителям загружать серверные файлы и базу данных.
+// Защита серверных файлов и базы данных.
 app.use((req, res, next) => {
   let requestedPath;
 
@@ -96,11 +96,29 @@ app.use((req, res, next) => {
   next();
 });
 
-// HTML-страницы и изображения лежат в корне репозитория.
+// Статические файлы сайта.
 app.use(express.static(PUBLIC_DIR, { index: false }));
 
+// Главная страница.
 app.get('/', (req, res) => {
+  res.sendFile(path.join(ROOT, 'index.html'), error => {
+    if (error && !res.headersSent) {
+      console.error('index.html error:', error.message);
+      res.status(500).send('Не удалось открыть index.html.');
+    }
+  });
+});
+
+app.get('/index.html', (req, res) => {
   res.sendFile(path.join(ROOT, 'index.html'));
+});
+
+app.get('/admin.html', (req, res) => {
+  res.sendFile(path.join(ROOT, 'admin.html'));
+});
+
+app.get('/status.html', (req, res) => {
+  res.sendFile(path.join(ROOT, 'status.html'));
 });
 
 function readDb() {
@@ -166,21 +184,6 @@ function adminOnly(req, res, next) {
   next();
 }
 
-function notifyTelegram(message) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-
-  if (!token || !chatId) return;
-
-  fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text: message })
-  }).catch(error => {
-    console.error('Telegram error:', error.message);
-  });
-}
-
 // Публичные данные сайта.
 app.get('/api/public', (req, res) => {
   const db = readDb();
@@ -241,10 +244,6 @@ app.post('/api/requests', (req, res) => {
 
   const statusUrl =
     `${base}/status.html?token=${encodeURIComponent(request.public_token)}`;
-
-  notifyTelegram(
-    `Новая заявка №${request.id}\nИмя: ${name}\nТелефон: ${phone}\nТехника: ${equipment}\nАдрес: ${request.address}`
-  );
 
   res.status(201).json({
     ok: true,
@@ -313,8 +312,6 @@ app.post('/api/requests/status/:token/messages', (req, res) => {
   db.messages.push(message);
   writeDb(db);
 
-  notifyTelegram(`Сообщение клиента по заявке №${request.id}\n${text}`);
-
   res.status(201).json({ ok: true, message });
 });
 
@@ -325,6 +322,7 @@ app.post('/api/admin/login', (req, res) => {
 
   const expectedUser =
     process.env.ADMIN_USERNAME || process.env.ADMIN_USER || 'owner';
+
   const expectedPass =
     process.env.ADMIN_PASSWORD || process.env.ADMIN_PASS;
 
@@ -524,7 +522,7 @@ app.delete('/api/admin/requests/:id', adminOnly, (req, res) => {
 });
 
 // Неизвестные API-маршруты и страницы.
-app.use((req, res, next) => {
+app.use((req, res) => {
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({
       ok: false,
@@ -532,7 +530,7 @@ app.use((req, res, next) => {
     });
   }
 
-  res.status(404).send('Страница не найдена.');
+  res.status(404).send('Страница не найдена: ' + req.path);
 });
 
 // Обработка ошибок.
@@ -550,4 +548,3 @@ app.use((error, req, res, next) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server started on port ${PORT}`);
 });
-```
